@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+pandas
+langchain
+langchain-experimental
+langchain-ollama
+pydantic
+python-multipart
