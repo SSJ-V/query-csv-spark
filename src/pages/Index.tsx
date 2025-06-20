@@ -8,7 +8,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Upload, MessageCircle, Database, Brain } from "lucide-react";
 import Papa from "papaparse";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "https://spark-rag.onrender.com";
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const Index = () => {
   const [csvData, setCsvData] = useState<any[]>([]);

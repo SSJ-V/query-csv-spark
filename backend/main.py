@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import requests
 import re  # <-- (already added previously)
+from csv_agent import CSVAgent
 
 # === NVIDIA API CONFIG ===
 
@@ -78,76 +79,8 @@ async def ask_question(query: Query):
     except Exception as e:
         return {"error": f"Failed to read CSV: {str(e)}"}
 
-    # Build prompt
-    prompt = f"""
-You are a pandas data analyst.
-The dataframe is named 'df' and has these columns: {list(df.columns)}.
-Your ONLY task is to write Python pandas code to answer the user's question.
-ALWAYS assign your answer to a variable named result. Do not print. Do not explain. Do not use markdown or triple backticks.
-
-User Question: {query.question}
-Python Code:
-"""
-
-    headers = {
-        "Authorization": f"Bearer {NVIDIA_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": NVIDIA_MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 512,
-        "temperature": 0.1,
-        "top_p": 1.0,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0,
-        "stream": False
-    }
-
-    try:
-        response = requests.post(NVIDIA_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        raw_code = result['choices'][0]['message']['content'].strip()
-
-        # Clean LLM code
-        cleaned_code = clean_llm_code(raw_code)
-
-        # Ensure code assigns to 'result'
-        if 'result' not in cleaned_code.split('=')[0]:
-            # If single line, wrap as result = <code>
-            lines = [line for line in cleaned_code.splitlines() if line.strip()]
-            if len(lines) == 1 and not lines[0].strip().startswith('result'):
-                cleaned_code = f"result = {lines[0]}"
-            elif len(lines) > 1:
-                # If multi-line, try to assign last line to result if not already
-                if not lines[-1].strip().startswith('result'):
-                    lines[-1] = f"result = {lines[-1]}"
-                cleaned_code = '\n'.join(lines)
-
-        print(f"\n--- Raw LLM Output ---\n{raw_code}\n")
-        print(f"--- Cleaned Code To Execute ---\n{cleaned_code}\n")
-
-    except Exception as e:
-        return {"error": f"NVIDIA API Error: {str(e)}"}
-
-    # === UPDATED EXECUTION LOGIC ===
-    try:
-        local_vars = {"df": df.copy()}
-        exec(cleaned_code, {}, local_vars)  # allow multi-line code block
-        output = local_vars.get("result", "Code executed successfully. No direct result.")
-    except Exception as e:
-        return {"query": cleaned_code, "final_answer": f"Execution Error: {str(e)}"}
-
-    # Convert result to string for frontend
-    if isinstance(output, pd.DataFrame):
-        output_str = output.to_string()
-    elif isinstance(output, pd.Series):
-        output_str = output.to_string()
-    else:
-        output_str = str(output)
-
-    return {"query": cleaned_code, "final_answer": output_str}
+    agent = CSVAgent(df)
+    return agent.answer(query.question)
 
 # === TEST ROUTE ===
 

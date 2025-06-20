@@ -78,7 +78,7 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
         formData.append("file", file);
 
         try {
-          const response = await fetch("https://spark-rag.onrender.com/upload-csv", {
+          const response = await fetch("http://localhost:8000/upload-csv", {
             method: "POST",
             body: formData
           });

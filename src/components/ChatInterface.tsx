@@ -52,7 +52,7 @@ export const ChatInterface = ({ csvData, fileName }: ChatInterfaceProps) => {
     setIsLoading(true);
 
     try {
-      const response = await fetch("https://spark-rag.onrender.com/ask", {
+      const response = await fetch("http://localhost:8000/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: input.trim() }),
