@@ -3,16 +3,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import io
-import re
 import os
+import re
+
 from langchain_ollama import ChatOllama
-from langchain.agents import initialize_agent
-from langchain.agents.agent_types import AgentType
-from langchain_experimental.tools.python.tool import PythonAstREPLTool
 
 app = FastAPI()
 
-# CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,151 +18,103 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global state
+# === Global State ===
 state = {
     "df": None,
-    "agent_executor": None,
-    "repl_tool": None
+    "csv_path": None,
+    "llm": None
 }
 
-class Query(BaseModel):
-    question: str
-
-def infer_column_description(colname):
-    colname_lower = colname.lower()
-    if any(keyword in colname_lower for keyword in ['id', 'match', 'game', 'student', 'invoice']):
-        return "Unique identifier or reference."
-    elif any(keyword in colname_lower for keyword in ['date', 'time', 'year', 'month']):
-        return "Temporal information."
-    elif any(keyword in colname_lower for keyword in ['team', 'company', 'org', 'school']):
-        return "Organization name or group."
-    elif any(keyword in colname_lower for keyword in ['player', 'batter', 'bowler', 'student', 'name']):
-        return "Person name."
-    elif any(keyword in colname_lower for keyword in ['run', 'score', 'grade', 'mark', 'revenue', 'amount']):
-        return "Numeric value or measurement."
-    elif any(keyword in colname_lower for keyword in ['is_', 'flag', 'bool', 'yes', 'no']):
-        return "Boolean indicator."
-    else:
-        return "General information."
+# === Upload CSV ===
 
 @app.post("/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
     content = await file.read()
+
+    os.makedirs("uploads", exist_ok=True)
+    csv_path = os.path.join("uploads", file.filename)
+    with open(csv_path, "wb") as f:
+        f.write(content)
+
     try:
-        df = pd.read_csv(io.StringIO(content.decode("utf-8")))
+        df = pd.read_csv(csv_path)
     except Exception as e:
-        return {"error": f"Failed to read CSV: {str(e)}"}
+        return {"error": f"Failed to load CSV: {str(e)}"}
 
     if df.shape[1] == 0:
-        return {"error": "No columns found in uploaded CSV."}
+        return {"error": "Empty CSV"}
 
     state["df"] = df
-
-    # Generate schema hint dynamically
-    schema_hint = "The dataset has the following columns:\n"
-    for col in df.columns:
-        dtype = str(df[col].dtype)
-        description = infer_column_description(col)
-        schema_hint += f"- '{col}' ({dtype}): {description}\n"
+    state["csv_path"] = csv_path
 
     print("\n=== CSV Uploaded ===")
-    print(schema_hint)
     print(df.head())
 
-    repl_tool = PythonAstREPLTool()
-    repl_tool.globals = {"df": df}
-
-    llm = ChatOllama(
+    # Build model only after CSV loaded
+    state["llm"] = ChatOllama(
         base_url="http://localhost:11434",
         model="llama3",
         temperature=0.1,
         api_key="ollama"
     )
 
-    agent_executor = initialize_agent(
-        tools=[repl_tool],
-        llm=llm,
-        agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
-        agent_kwargs={
-            "prefix": (
-                "You are an expert data analyst AI with access to a pandas dataframe `df` loaded from the uploaded CSV file.\n"
-                "The dataframe columns and inferred descriptions are:\n"
-                f"{schema_hint}\n"
-                "Reason carefully and think step-by-step before answering.\n"
-                "Only use Python code when needed to calculate answers.\n"
-                "Do NOT assume relationships that are not directly present in the data unless clearly evident from the question and column names.\n"
-                "You have no prior domain knowledge, you only know what the CSV provides."
-            ),
-            "format_instructions": (
-                "Use this format:\n\n"
-                "Question: the input question\n"
-                "Thought: your reasoning\n"
-                "Action: python_repl_ast\n"
-                "Action Input: python code using df\n"
-                "Observation: result of code\n"
-                "...\n"
-                "Final Answer: your final answer."
-            )
-        },
-        verbose=True,
-        handle_parsing_errors=True,
-        max_iterations=20,
-        max_execution_time=120,
-    )
-
-    state["agent_executor"] = agent_executor
-    state["repl_tool"] = repl_tool
-
     return {"status": "success", "columns": df.columns.tolist(), "rows": len(df)}
+
+
+# === Query model ===
+
+class Query(BaseModel):
+    question: str
+
+# === Custom RAG execution ===
 
 @app.post("/ask")
 async def ask_question(query: Query):
-    if state["agent_executor"] is None or state["df"] is None:
-        return {"error": "No CSV uploaded or agent not initialized."}
+    if state["df"] is None or state["llm"] is None:
+        return {"error": "CSV not uploaded"}
 
-    print(f"\n=== New User Query: {query.question} ===")
+    df = state["df"]
+    llm = state["llm"]
 
+    # Build prompt manually:
+    prompt = f"""
+You are a pandas data analyst.
+The dataframe is named 'df' and has the following columns: {list(df.columns)}.
+
+Your ONLY task is to write Python pandas code using 'df' to answer the user's question.
+DO NOT explain anything.
+DO NOT write any text.
+ONLY return Python code directly. No markdown. No triple backticks. No comments.
+
+User Question: {query.question}
+Python Code:
+"""
+
+    # Call LLM
+    response = llm.invoke(prompt)
+    code = response.content.strip()
+
+    print(f"\n--- Generated Code ---\n{code}\n---------------------")
+
+    # Execute code safely
     try:
-        result = state["agent_executor"].invoke({"input": query.question})
-        full_output = result["output"]
-
-        print("\n--- Raw Agent Output ---")
-        print(full_output)
-        print("------------------------")
-
-        # Extract and stack all Action Inputs including prefix
-        action_input_matches = re.findall(r"(Action Input:\s*`?.*?`?)\s*(?:\n|$)", full_output, re.DOTALL)
-        if action_input_matches:
-            stacked_action_inputs = "\n".join(action_input_matches)
-        else:
-            stacked_action_inputs = query.question
-
-        # Extract Final Answer
-        final_answer_match = re.search(r"Final Answer:\s*(.*)", full_output, re.IGNORECASE | re.DOTALL)
-        if final_answer_match:
-            final_answer_raw = final_answer_match.group(1).strip()
-            final_answer = re.split(r"Note:", final_answer_raw)[0].strip()
-            print(f"Extracted Clean Final Answer: {final_answer}")
-        else:
-            if "iteration limit" in full_output.lower() or "time limit" in full_output.lower():
-                final_answer = "The question was too vague, could not get the required output."
-            else:
-                sentences = [s.strip() for s in full_output.split('\n') if s.strip()]
-                fallback_answer = next(
-                    (s for s in reversed(sentences) if "note" not in s.lower()),
-                    full_output.strip()
-                )
-                final_answer = fallback_answer
-            print(f"No 'Final Answer:' found. Fallback: {final_answer}")
-
-        return {
-            "query": stacked_action_inputs,
-            "final_answer": final_answer
-        }
-
+        local_vars = {"df": df.copy()}
+        exec(f"result = {code}", {}, local_vars)
+        result = local_vars["result"]
     except Exception as e:
-        print(f"Error: {e}")
-        return {"error": str(e)}
+        print(f"Execution error: {e}")
+        return {"query": code, "final_answer": f"Execution Error: {str(e)}"}
+
+    # Convert result to string for display
+    if isinstance(result, pd.DataFrame):
+        output = result.to_string()
+    elif isinstance(result, pd.Series):
+        output = result.to_string()
+    else:
+        output = str(result)
+
+    return {"query": code, "final_answer": output}
+
 
 @app.get("/")
 def read_root():
