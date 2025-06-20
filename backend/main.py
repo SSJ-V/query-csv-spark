@@ -2,7 +2,6 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
-import io
 import os
 import requests
 import re  # <-- (already added previously)
@@ -83,7 +82,8 @@ async def ask_question(query: Query):
     prompt = f"""
 You are a pandas data analyst.
 The dataframe is named 'df' and has these columns: {list(df.columns)}.
-ONLY write pandas code to answer the question. No explanation, no markdown, no triple backticks.
+Your ONLY task is to write Python pandas code to answer the user's question.
+ALWAYS assign your answer to a variable named result. Do not print. Do not explain. Do not use markdown or triple backticks.
 
 User Question: {query.question}
 Python Code:
@@ -112,6 +112,18 @@ Python Code:
 
         # Clean LLM code
         cleaned_code = clean_llm_code(raw_code)
+
+        # Ensure code assigns to 'result'
+        if 'result' not in cleaned_code.split('=')[0]:
+            # If single line, wrap as result = <code>
+            lines = [line for line in cleaned_code.splitlines() if line.strip()]
+            if len(lines) == 1 and not lines[0].strip().startswith('result'):
+                cleaned_code = f"result = {lines[0]}"
+            elif len(lines) > 1:
+                # If multi-line, try to assign last line to result if not already
+                if not lines[-1].strip().startswith('result'):
+                    lines[-1] = f"result = {lines[-1]}"
+                cleaned_code = '\n'.join(lines)
 
         print(f"\n--- Raw LLM Output ---\n{raw_code}\n")
         print(f"--- Cleaned Code To Execute ---\n{cleaned_code}\n")
