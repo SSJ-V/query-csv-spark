@@ -2,31 +2,49 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
+import io
 import os
 import requests
+import re  # <-- (NEW) for code cleanup
 
-# NVIDIA API CONFIG
+# === NVIDIA API CONFIG ===
+
 NVIDIA_API_KEY = "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"
 NVIDIA_MODEL = "meta/llama-4-scout-17b-16e-instruct"
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# FASTAPI SETUP
+# === FASTAPI SETUP ===
+
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Allow all origins (frontend hosted elsewhere)
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# GLOBAL STATE
+# === GLOBAL STATE ===
+
 state = {
     "csv_path": None
 }
 
-# Upload CSV endpoint
+# === CLEANING FUNCTION ===  <-- (NEW)
+def clean_llm_code(raw_code: str) -> str:
+    # Remove any ```python ... ``` wrappers
+    cleaned = re.sub(r"```.*?\n", "", raw_code, flags=re.DOTALL)
+    cleaned = cleaned.replace("```", "").strip()
+
+    # Remove print() wrapper if exists
+    if cleaned.startswith("print(") and cleaned.endswith(")"):
+        cleaned = cleaned[6:-1].strip()
+
+    return cleaned
+
+# === UPLOAD CSV ===
+
 @app.post("/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
     os.makedirs("uploads", exist_ok=True)
@@ -36,16 +54,19 @@ async def upload_csv(file: UploadFile = File(...)):
         f.write(content)
 
     try:
-        pd.read_csv(csv_path)  # Validate
+        pd.read_csv(csv_path)
     except Exception as e:
         return {"error": f"Failed to load CSV: {str(e)}"}
 
     state["csv_path"] = csv_path
     return {"status": "success"}
 
-# Query endpoint
+# === QUERY MODEL ===
+
 class Query(BaseModel):
     question: str
+
+# === ASK ROUTE ===
 
 @app.post("/ask")
 async def ask_question(query: Query):
@@ -57,11 +78,11 @@ async def ask_question(query: Query):
     except Exception as e:
         return {"error": f"Failed to read CSV: {str(e)}"}
 
-    # Build prompt for NVIDIA
+    # Build prompt
     prompt = f"""
 You are a pandas data analyst.
 The dataframe is named 'df' and has these columns: {list(df.columns)}.
-ONLY write Python pandas code to answer the question. No explanation, no markdown.
+ONLY write pandas code to answer the question. No explanation, no markdown, no triple backticks.
 
 User Question: {query.question}
 Python Code:
@@ -86,20 +107,25 @@ Python Code:
         response = requests.post(NVIDIA_API_URL, headers=headers, json=payload)
         response.raise_for_status()
         result = response.json()
-        code = result['choices'][0]['message']['content'].strip()
-        print(f"\nGenerated Code:\n{code}\n")
+        raw_code = result['choices'][0]['message']['content'].strip()
+
+        # === (NEW) clean LLM generated code ===
+        cleaned_code = clean_llm_code(raw_code)
+
+        print(f"\n--- Raw LLM Output ---\n{raw_code}\n")
+        print(f"--- Cleaned Code To Execute ---\n{cleaned_code}\n")
+
     except Exception as e:
         return {"error": f"NVIDIA API Error: {str(e)}"}
 
-    # Execute generated code
+    # Execute cleaned code safely
     try:
         local_vars = {"df": df.copy()}
-        exec(f"result = {code}", {}, local_vars)
+        exec(f"result = {cleaned_code}", {}, local_vars)
         output = local_vars["result"]
     except Exception as e:
-        return {"query": code, "final_answer": f"Execution Error: {str(e)}"}
+        return {"query": cleaned_code, "final_answer": f"Execution Error: {str(e)}"}
 
-    # Serialize output
     if isinstance(output, pd.DataFrame):
         output_str = output.to_string()
     elif isinstance(output, pd.Series):
@@ -107,7 +133,9 @@ Python Code:
     else:
         output_str = str(output)
 
-    return {"query": code, "final_answer": output_str}
+    return {"query": cleaned_code, "final_answer": output_str}
+
+# === TEST ROUTE ===
 
 @app.get("/")
 def read_root():
