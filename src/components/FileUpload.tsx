@@ -29,71 +29,71 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
     setIsProcessing(true);
     setUploadedFile(file);
 
-    // ✅ Upload CSV directly to backend
-    const formData = new FormData();
-    formData.append("file", file);
-    try {
-      const response = await fetch("https://spark-rag.onrender.com/upload-csv", {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) throw new Error("Upload failed");
-
-      Papa.parse(file, {
-        header: true,
-        skipEmptyLines: true,
-        complete: (results) => {
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        if (results.errors.length > 0) {
           toast({
-            title: "File uploaded successfully!",
-            description: `Processed ${results.data.length} rows of data.`,
+            title: "Parse Error",
+            description: "There was an error parsing your CSV file.",
+            variant: "destructive",
           });
-          onFileUpload(results.data, file.name, file);
           setIsProcessing(false);
+          return;
         }
-      });
-    } catch {
-      toast({
-        title: "Backend error",
-        description: "Failed to upload to backend.",
-        variant: "destructive"
-      });
-      setIsProcessing(false);
-    }
+
+        toast({
+          title: "File uploaded successfully!",
+          description: `Processed ${results.data.length} rows of data.`,
+        });
+
+        onFileUpload(results.data, file.name, file);
+        setIsProcessing(false);
+      },
+      error: () => {
+        toast({
+          title: "Upload Error",
+          description: "Failed to upload the file. Please try again.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+      }
+    });
   };
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) handleFile(file);
+    if (file) {
+      handleFile(file);
+    }
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <Card className="border-dashed border-2 p-12 text-center cursor-pointer"
-            onClick={() => fileInputRef.current?.click()}>
-        <input type="file" accept=".csv" ref={fileInputRef} hidden onChange={handleFileInput} />
-        <div className="flex flex-col items-center">
-          <div className="w-16 h-16 mb-6 flex justify-center items-center bg-gray-100 rounded-full">
-            {isProcessing ? (
-              <div className="animate-spin border-2 border-t-transparent w-8 h-8 rounded-full border-blue-500" />
-            ) : uploadedFile ? (
-              <CheckCircle className="w-10 h-10 text-green-500" />
-            ) : (
-              <Upload className="w-10 h-10 text-blue-500" />
+    <div className="flex justify-center items-center min-h-[60vh]">
+      <Card 
+        className="w-full max-w-2xl p-12 bg-white border-dashed border-2 border-gray-300 text-center cursor-pointer hover:border-blue-500 transition-all"
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <input type="file" accept=".csv" onChange={handleFileInput} className="hidden" ref={fileInputRef} />
+        {!uploadedFile ? (
+          <>
+            <div className="mb-6">
+              <Upload className="w-16 h-16 mx-auto text-blue-500" />
+            </div>
+            <h2 className="text-xl font-semibold mb-2">Upload your CSV file</h2>
+            <p className="text-gray-500 mb-4">Drag and drop or click to upload. Only CSV files supported.</p>
+            {isProcessing && (
+              <p className="text-sm text-gray-400">Processing...</p>
             )}
-          </div>
-          {uploadedFile ? (
-            <>
-              <h3 className="font-semibold text-green-600">File uploaded!</h3>
-              <p className="text-sm text-gray-500 mt-2">{uploadedFile.name}</p>
-            </>
-          ) : (
-            <>
-              <h3 className="font-semibold text-gray-700">Upload your CSV</h3>
-              <p className="text-sm text-gray-500">Click or drag to upload</p>
-            </>
-          )}
-        </div>
+          </>
+        ) : (
+          <>
+            <CheckCircle className="w-16 h-16 mx-auto text-green-500 mb-4" />
+            <h2 className="text-lg font-semibold text-green-600 mb-2">File uploaded successfully!</h2>
+            <p className="text-gray-500">{uploadedFile.name}</p>
+          </>
+        )}
       </Card>
     </div>
   );
