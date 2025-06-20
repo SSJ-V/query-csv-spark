@@ -8,6 +8,8 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Upload, MessageCircle, Database, Brain } from "lucide-react";
 import Papa from "papaparse";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
 const Index = () => {
   const [csvData, setCsvData] = useState<any[]>([]);
   const [fileName, setFileName] = useState<string>("");
@@ -16,13 +18,12 @@ const Index = () => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ✅ New: Backend call function to upload CSV
   const uploadCsvToBackend = async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:8000/upload-csv", {
+      const response = await fetch(`${API_URL}/upload-csv`, {
         method: "POST",
         body: formData,
       });
@@ -40,10 +41,10 @@ const Index = () => {
     }
   };
 
-  // ✅ New: Backend call function to ask questions
+  // Ask backend query
   const askBackend = async (question: string) => {
     try {
-      const response = await fetch("http://localhost:8000/ask", {
+      const response = await fetch(`${API_URL}/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question }),
