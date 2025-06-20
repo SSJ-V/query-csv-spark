@@ -16,6 +16,34 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
   const { toast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const handleDrag = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  const handleDragIn = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  }, []);
+
+  const handleDragOut = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  }, []);
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    
+    const files = e.dataTransfer.files;
+    if (files && files[0]) {
+      handleFile(files[0]);
+    }
+  }, []);
+
   const handleFile = async (file: File) => {
     if (!file.name.toLowerCase().endsWith('.csv')) {
       toast({
@@ -32,7 +60,7 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
     Papa.parse(file, {
       header: true,
       skipEmptyLines: true,
-      complete: (results) => {
+      complete: async (results) => {
         if (results.errors.length > 0) {
           toast({
             title: "Parse Error",
@@ -43,18 +71,43 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
           return;
         }
 
-        toast({
-          title: "File uploaded successfully!",
-          description: `Processed ${results.data.length} rows of data.`,
-        });
+        console.log("CSV data parsed:", results.data);
 
-        onFileUpload(results.data, file.name, file);
-        setIsProcessing(false);
+        // ✅ Upload to backend server
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+          const response = await fetch("https://spark-rag.onrender.com/upload-csv", {
+            method: "POST",
+            body: formData
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to upload CSV to backend.");
+          }
+
+          toast({
+            title: "File uploaded successfully!",
+            description: `Processed ${results.data.length} rows of data.`,
+          });
+
+          onFileUpload(results.data, file.name, file);
+        } catch (error) {
+          console.error("Backend upload error:", error);
+          toast({
+            title: "Upload Error",
+            description: "Failed to upload to backend.",
+            variant: "destructive",
+          });
+        } finally {
+          setIsProcessing(false);
+        }
       },
       error: () => {
         toast({
           title: "Upload Error",
-          description: "Failed to upload the file. Please try again.",
+          description: "Failed to parse file. Please try again.",
           variant: "destructive",
         });
         setIsProcessing(false);
@@ -69,31 +122,78 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
     }
   };
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (!isProcessing) {
+      fileInputRef.current?.click();
+    }
+  };
+
   return (
-    <div className="flex justify-center items-center min-h-[60vh]">
+    <div className="max-w-2xl mx-auto">
       <Card 
-        className="w-full max-w-2xl p-12 bg-white border-dashed border-2 border-gray-300 text-center cursor-pointer hover:border-blue-500 transition-all"
-        onClick={() => fileInputRef.current?.click()}
+        className={`
+          relative overflow-hidden transition-all duration-300 ease-in-out
+          ${isDragging ? 'border-blue-400 bg-blue-50/80 scale-102' : 'border-gray-200 bg-white/60 hover:bg-white/80'}
+          ${isProcessing ? 'pointer-events-none' : ''}
+          backdrop-blur-sm border-2 border-dashed
+        `}
+        onDragEnter={handleDragIn}
+        onDragLeave={handleDragOut}
+        onDragOver={handleDrag}
+        onDrop={handleDrop}
+        onClick={handleCardClick}
+        style={{ cursor: isProcessing ? 'not-allowed' : 'pointer' }}
       >
-        <input type="file" accept=".csv" onChange={handleFileInput} className="hidden" ref={fileInputRef} />
-        {!uploadedFile ? (
-          <>
-            <div className="mb-6">
-              <Upload className="w-16 h-16 mx-auto text-blue-500" />
+        <input
+          type="file"
+          accept=".csv"
+          onChange={handleFileInput}
+          className="hidden"
+          disabled={isProcessing}
+          ref={fileInputRef}
+        />
+        <div className="p-12">
+          <div className="text-center">
+            <div className={`
+              w-16 h-16 mx-auto mb-6 rounded-full flex items-center justify-center transition-all duration-300
+              ${isDragging ? 'bg-blue-500 scale-110' : uploadedFile ? 'bg-green-500' : 'bg-gray-100'}
+            `}>
+              {isProcessing ? (
+                <div className="animate-spin w-6 h-6 border-2 border-white border-t-transparent rounded-full" />
+              ) : uploadedFile ? (
+                <CheckCircle className="w-8 h-8 text-white" />
+              ) : (
+                <Upload className={`w-8 h-8 transition-colors duration-300 ${isDragging ? 'text-white' : 'text-gray-400'}`} />
+              )}
             </div>
-            <h2 className="text-xl font-semibold mb-2">Upload your CSV file</h2>
-            <p className="text-gray-500 mb-4">Drag and drop or click to upload. Only CSV files supported.</p>
-            {isProcessing && (
-              <p className="text-sm text-gray-400">Processing...</p>
+            
+            {uploadedFile ? (
+              <div className="animate-fade-in">
+                <h3 className="text-lg font-semibold text-green-600 mb-2">File uploaded successfully!</h3>
+                <div className="flex items-center justify-center gap-2 text-gray-600 mb-4">
+                  <FileText className="w-4 h-4" />
+                  <span className="text-sm">{uploadedFile.name}</span>
+                </div>
+                <p className="text-sm text-gray-500">Your CSV file has been processed and added to the knowledge base.</p>
+              </div>
+            ) : (
+              <div>
+                <h3 className="text-lg font-semibold text-gray-700 mb-2">
+                  {isDragging ? "Drop your CSV file here" : "Upload your CSV file"}
+                </h3>
+                <p className="text-gray-500 mb-6">Drag and drop your CSV file here, or click to browse</p>
+                <div className="flex flex-col items-center">
+                  <Upload className="w-4 h-4 mb-2 text-blue-500" />
+                  <span className="font-semibold text-gray-700">
+                    {isProcessing ? "Processing..." : "Click or drag to upload CSV"}
+                  </span>
+                  <span className="text-xs text-gray-400 mt-2">Supported format: CSV files only</span>
+                </div>
+              </div>
             )}
-          </>
-        ) : (
-          <>
-            <CheckCircle className="w-16 h-16 mx-auto text-green-500 mb-4" />
-            <h2 className="text-lg font-semibold text-green-600 mb-2">File uploaded successfully!</h2>
-            <p className="text-gray-500">{uploadedFile.name}</p>
-          </>
-        )}
+          </div>
+        </div>
+        <div className={`absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-400 opacity-0 transition-opacity duration-300 ${isDragging ? 'opacity-20' : ''}`} />
       </Card>
     </div>
   );

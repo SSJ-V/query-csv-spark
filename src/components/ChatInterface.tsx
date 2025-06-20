@@ -119,12 +119,16 @@ export const ChatInterface = ({ csvData, fileName }: ChatInterfaceProps) => {
                   <Bot className="w-4 h-4 text-white" />
                 </div>
               )}
+              
               <div className={`max-w-[80%] space-y-2 ${message.role === "user" ? "order-1" : ""}`}>
                 <div className={`p-3 rounded-lg ${message.role === "user" ? "bg-blue-500 text-white ml-auto" : "bg-gray-100 text-gray-800"}`}>
                   <p className="whitespace-pre-wrap">{message.content}</p>
                 </div>
-                <div className="text-xs text-gray-500">{formatTimestamp(message.timestamp)}</div>
+                <div className="text-xs text-gray-500">
+                  {formatTimestamp(message.timestamp)}
+                </div>
               </div>
+              
               {message.role === "user" && (
                 <div className="w-8 h-8 bg-gray-300 rounded-full flex items-center justify-center flex-shrink-0">
                   <User className="w-4 h-4 text-gray-600" />
@@ -171,7 +175,9 @@ export const ChatInterface = ({ csvData, fileName }: ChatInterfaceProps) => {
             Send
           </Button>
         </form>
-        <div className="mt-2 text-xs text-gray-500">Press Enter to send, Shift+Enter for new line</div>
+        <div className="mt-2 text-xs text-gray-500">
+          Press Enter to send, Shift+Enter for new line
+        </div>
       </Card>
     </div>
   );
