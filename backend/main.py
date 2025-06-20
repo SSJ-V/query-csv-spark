@@ -5,7 +5,7 @@ import pandas as pd
 import io
 import os
 import requests
-import re  # <-- (NEW) for code cleanup
+import re  # <-- (already added previously)
 
 # === NVIDIA API CONFIG ===
 
@@ -31,7 +31,8 @@ state = {
     "csv_path": None
 }
 
-# === CLEANING FUNCTION ===  <-- (NEW)
+# === CLEANING FUNCTION ===
+
 def clean_llm_code(raw_code: str) -> str:
     # Remove any ```python ... ``` wrappers
     cleaned = re.sub(r"```.*?\n", "", raw_code, flags=re.DOTALL)
@@ -109,7 +110,7 @@ Python Code:
         result = response.json()
         raw_code = result['choices'][0]['message']['content'].strip()
 
-        # === (NEW) clean LLM generated code ===
+        # Clean LLM code
         cleaned_code = clean_llm_code(raw_code)
 
         print(f"\n--- Raw LLM Output ---\n{raw_code}\n")
@@ -118,14 +119,15 @@ Python Code:
     except Exception as e:
         return {"error": f"NVIDIA API Error: {str(e)}"}
 
-    # Execute cleaned code safely
+    # === UPDATED EXECUTION LOGIC ===
     try:
         local_vars = {"df": df.copy()}
-        exec(f"result = {cleaned_code}", {}, local_vars)
-        output = local_vars["result"]
+        exec(cleaned_code, {}, local_vars)  # allow multi-line code block
+        output = local_vars.get("result", "Code executed successfully. No direct result.")
     except Exception as e:
         return {"query": cleaned_code, "final_answer": f"Execution Error: {str(e)}"}
 
+    # Convert result to string for frontend
     if isinstance(output, pd.DataFrame):
         output_str = output.to_string()
     elif isinstance(output, pd.Series):
