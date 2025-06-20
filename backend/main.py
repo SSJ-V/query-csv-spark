@@ -3,15 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import io
-import os
 import requests
 
-# NVIDIA API CONFIG
-NVIDIA_API_KEY = "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"  # (keep your key)
+# === NVIDIA API CONFIG ===
+
+NVIDIA_API_KEY = "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"
 NVIDIA_MODEL = "meta/llama-4-scout-17b-16e-instruct"
 NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 
-# FASTAPI SETUP
+# === FastAPI Setup ===
+
 app = FastAPI()
 
 app.add_middleware(
@@ -22,50 +23,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# GLOBAL STATE (only file path)
-state = {
-    "csv_path": None
-}
+# === Data Models ===
 
-# Upload CSV
-@app.post("/upload-csv")
-async def upload_csv(file: UploadFile = File(...)):
-    os.makedirs("uploads", exist_ok=True)
-    csv_path = os.path.join("uploads", file.filename)
-    with open(csv_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+class UploadRequest(BaseModel):
+    csv_content: str  # CSV file content as text
 
-    # Test if file is valid CSV
-    try:
-        pd.read_csv(csv_path)
-    except Exception as e:
-        return {"error": f"Failed to load CSV: {str(e)}"}
-
-    state["csv_path"] = csv_path
-    return {"status": "success"}
-
-# Query model
-class Query(BaseModel):
+class QueryRequest(BaseModel):
+    csv_content: str  # CSV file content again (always resend full CSV)
     question: str
 
-# Custom RAG execution
-@app.post("/ask")
-async def ask_question(query: Query):
-    if state["csv_path"] is None:
-        return {"error": "CSV not uploaded"}
+# === Upload route (frontend still parses CSV file and sends its full text)
 
+@app.post("/upload-csv")
+async def upload_csv(req: UploadRequest):
     try:
-        df = pd.read_csv(state["csv_path"])
+        # Validate if CSV is correct
+        df = pd.read_csv(io.StringIO(req.csv_content))
     except Exception as e:
-        return {"error": f"Failed to read CSV: {str(e)}"}
+        return {"error": f"Failed to parse CSV: {str(e)}"}
 
+    # Just return column names for preview
+    return {"status": "success", "columns": df.columns.tolist(), "rows": len(df)}
+
+# === Ask route
+
+@app.post("/ask")
+async def ask_question(req: QueryRequest):
+    try:
+        df = pd.read_csv(io.StringIO(req.csv_content))
+    except Exception as e:
+        return {"error": f"Failed to parse CSV: {str(e)}"}
+
+    # Build prompt
     prompt = f"""
 You are a pandas data analyst.
 The dataframe is named 'df' and has these columns: {list(df.columns)}.
 ONLY write pandas code to answer the question. No explanation, no markdown.
 
-User Question: {query.question}
+User Question: {req.question}
 Python Code:
 """
 
@@ -77,11 +72,7 @@ Python Code:
         "model": NVIDIA_MODEL,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": 512,
-        "temperature": 0.1,
-        "top_p": 1.0,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0,
-        "stream": False
+        "temperature": 0.1
     }
 
     try:
@@ -110,6 +101,7 @@ Python Code:
 
     return {"query": code, "final_answer": output_str}
 
+# === Root health check
 @app.get("/")
 def read_root():
     return {"status": "ok"}
