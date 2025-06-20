@@ -60,6 +60,23 @@ Python Code:
                 code = '\n'.join(lines)
         return code
 
+    def summarize_answer(self, question: str, code: str, output: str) -> str:
+        prompt = f"""
+You are a data analyst assistant.
+Given the following pandas code and its output, summarize the answer to the user's question in plain English.
+
+User Question: {question}
+
+Pandas Code:
+{code}
+
+Output:
+{output}
+
+Summary:
+"""
+        return self.call_llm(prompt)
+
     def answer(self, question: str):
         prompt = self.build_prompt(question)
         raw_code = self.call_llm(prompt)
@@ -77,4 +94,10 @@ Python Code:
             output_str = output.to_string()
         else:
             output_str = str(output)
-        return {"query": cleaned_code, "final_answer": output_str} 
+        # Step 2: Summarize
+        summary = self.summarize_answer(question, cleaned_code, output_str)
+        return {
+            "query": cleaned_code,
+            "raw_output": output_str,
+            "summary": summary.strip()
+        } 
