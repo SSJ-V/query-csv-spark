@@ -2,17 +2,11 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
+import io
 import os
-import requests
-import json
+import re
 
-# === NVIDIA API Config ===
-
-NVIDIA_API_KEY = "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"
-NVIDIA_MODEL = "meta/llama-4-scout-17b-16e-instruct"
-NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-
-# === FastAPI Setup ===
+from langchain_ollama import ChatOllama
 
 app = FastAPI()
 
@@ -25,29 +19,25 @@ app.add_middleware(
 )
 
 # === Global State ===
-
 state = {
     "df": None,
     "csv_path": None,
+    "llm": None
 }
 
-# === Upload CSV Endpoint ===
+# === Upload CSV ===
 
 @app.post("/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
+    content = await file.read()
+
     os.makedirs("uploads", exist_ok=True)
     csv_path = os.path.join("uploads", file.filename)
+    with open(csv_path, "wb") as f:
+        f.write(content)
 
     try:
-        with open(csv_path, "wb") as f:
-            while True:
-                chunk = await file.read(1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-
         df = pd.read_csv(csv_path)
-
     except Exception as e:
         return {"error": f"Failed to load CSV: {str(e)}"}
 
@@ -60,22 +50,33 @@ async def upload_csv(file: UploadFile = File(...)):
     print("\n=== CSV Uploaded ===")
     print(df.head())
 
+    # Build model only after CSV loaded
+    state["llm"] = ChatOllama(
+        base_url="http://localhost:11434",
+        model="llama3",
+        temperature=0.1,
+        api_key="ollama"
+    )
+
     return {"status": "success", "columns": df.columns.tolist(), "rows": len(df)}
 
-# === Query Model ===
+
+# === Query model ===
 
 class Query(BaseModel):
     question: str
 
-# === Ask Endpoint ===
+# === Custom RAG execution ===
 
 @app.post("/ask")
 async def ask_question(query: Query):
-    if state["df"] is None:
+    if state["df"] is None or state["llm"] is None:
         return {"error": "CSV not uploaded"}
 
     df = state["df"]
+    llm = state["llm"]
 
+    # Build prompt manually:
     prompt = f"""
 You are a pandas data analyst.
 The dataframe is named 'df' and has the following columns: {list(df.columns)}.
@@ -89,57 +90,31 @@ User Question: {query.question}
 Python Code:
 """
 
-    print(f"\n--- Prompt Sent ---\n{prompt}\n-------------------")
+    # Call LLM
+    response = llm.invoke(prompt)
+    code = response.content.strip()
 
-    headers = {
-        "Authorization": f"Bearer {NVIDIA_API_KEY}",
-        "Content-Type": "application/json"
-    }
+    print(f"\n--- Generated Code ---\n{code}\n---------------------")
 
-    payload = {
-        "model": NVIDIA_MODEL,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 512,
-        "temperature": 0.1,
-        "top_p": 1.0,
-        "frequency_penalty": 0.0,
-        "presence_penalty": 0.0,
-        "stream": False
-    }
-
-    try:
-        response = requests.post(NVIDIA_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        result = response.json()
-        code = result['choices'][0]['message']['content'].strip()
-
-        print(f"\n--- LLM Generated Code ---\n{code}\n--------------------------")
-
-    except Exception as e:
-        return {"error": f"NVIDIA API Error: {str(e)}"}
-
-    # Execute generated code safely
+    # Execute code safely
     try:
         local_vars = {"df": df.copy()}
         exec(f"result = {code}", {}, local_vars)
-        output = local_vars["result"]
+        result = local_vars["result"]
     except Exception as e:
         print(f"Execution error: {e}")
         return {"query": code, "final_answer": f"Execution Error: {str(e)}"}
 
-    # Convert result to string
-    if isinstance(output, pd.DataFrame):
-        output_str = output.to_string()
-    elif isinstance(output, pd.Series):
-        output_str = output.to_string()
+    # Convert result to string for display
+    if isinstance(result, pd.DataFrame):
+        output = result.to_string()
+    elif isinstance(result, pd.Series):
+        output = result.to_string()
     else:
-        output_str = str(output)
+        output = str(result)
 
-    return {"query": code, "final_answer": output_str}
+    return {"query": code, "final_answer": output}
 
-# === Test Route ===
 
 @app.get("/")
 def read_root():
