@@ -2,9 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
-import io
 import os
-import re
 import requests
 import json
 
@@ -33,19 +31,23 @@ state = {
     "csv_path": None,
 }
 
-# === Upload CSV ===
+# === Upload CSV Endpoint ===
 
 @app.post("/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
-    content = await file.read()
-
     os.makedirs("uploads", exist_ok=True)
     csv_path = os.path.join("uploads", file.filename)
-    with open(csv_path, "wb") as f:
-        f.write(content)
 
     try:
+        with open(csv_path, "wb") as f:
+            while True:
+                chunk = await file.read(1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+
         df = pd.read_csv(csv_path)
+
     except Exception as e:
         return {"error": f"Failed to load CSV: {str(e)}"}
 
@@ -60,12 +62,12 @@ async def upload_csv(file: UploadFile = File(...)):
 
     return {"status": "success", "columns": df.columns.tolist(), "rows": len(df)}
 
-# === Query model ===
+# === Query Model ===
 
 class Query(BaseModel):
     question: str
 
-# === Custom RAG execution ===
+# === Ask Endpoint ===
 
 @app.post("/ask")
 async def ask_question(query: Query):
@@ -74,7 +76,6 @@ async def ask_question(query: Query):
 
     df = state["df"]
 
-    # Build prompt manually:
     prompt = f"""
 You are a pandas data analyst.
 The dataframe is named 'df' and has the following columns: {list(df.columns)}.
@@ -138,7 +139,7 @@ Python Code:
 
     return {"query": code, "final_answer": output_str}
 
-# === Test route ===
+# === Test Route ===
 
 @app.get("/")
 def read_root():
