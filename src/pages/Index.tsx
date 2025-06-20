@@ -1,5 +1,4 @@
-
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { FileUpload } from "@/components/FileUpload";
@@ -7,22 +6,111 @@ import { ChatInterface } from "@/components/ChatInterface";
 import { DataPreview } from "@/components/DataPreview";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Upload, MessageCircle, Database, Brain } from "lucide-react";
+import Papa from "papaparse";
 
 const Index = () => {
   const [csvData, setCsvData] = useState<any[]>([]);
   const [fileName, setFileName] = useState<string>("");
   const [activeTab, setActiveTab] = useState<"upload" | "chat" | "preview">("upload");
   const [knowledgeBase, setKnowledgeBase] = useState<any[]>([]);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileUpload = (data: any[], filename: string) => {
+  // ✅ New: Backend call function to upload CSV
+  const uploadCsvToBackend = async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("http://localhost:8000/upload-csv", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to upload CSV.");
+      }
+
+      const data = await response.json();
+      console.log("Backend response:", data);
+      return true;
+    } catch (error: any) {
+      console.error(error);
+      return false;
+    }
+  };
+
+  // ✅ New: Backend call function to ask questions
+  const askBackend = async (question: string) => {
+    try {
+      const response = await fetch("http://localhost:8000/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to query backend.");
+      }
+
+      const data = await response.json();
+      console.log("Backend answer:", data);
+      return data.response || "No response.";
+    } catch (error: any) {
+      console.error(error);
+      return "Error: " + error.message;
+    }
+  };
+
+  // Existing frontend callback — you can call uploadCsvToBackend(file) inside your file upload flow
+
+  const handleFileUpload = async (data: any[], filename: string, file: File) => {
+    setIsProcessing(true);
     setCsvData(data);
     setFileName(filename);
     setKnowledgeBase(data);
-    setActiveTab("preview");
+    setActiveTab("chat");
+
+    // Send file to backend
+    const success = await uploadCsvToBackend(file);
+    if (!success) {
+      setActiveTab("upload");
+    }
+    setIsProcessing(false);
+  };
+
+  const handleHeaderUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleHeaderFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      setIsProcessing(true);
+      Papa.parse(file, {
+        header: true,
+        skipEmptyLines: true,
+        complete: (results) => {
+          handleFileUpload(results.data, file.name, file);
+          setIsProcessing(false);
+        },
+        error: () => {
+          setIsProcessing(false);
+        }
+      });
+    }
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-purple-50 dark:from-slate-900 dark:via-slate-800 dark:to-slate-900 transition-colors duration-500">
+      {/* Hidden file input for header upload */}
+      <input
+        type="file"
+        accept=".csv"
+        ref={fileInputRef}
+        style={{ display: "none" }}
+        onChange={handleHeaderFileInput}
+      />
       {/* Header */}
       <div className="backdrop-blur-sm bg-white/70 dark:bg-slate-900/70 border-b border-white/20 dark:border-slate-700/20 sticky top-0 z-10 transition-colors duration-500">
         <div className="container mx-auto px-4 py-4">
@@ -42,7 +130,7 @@ const Index = () => {
               <div className="flex gap-2">
                 <Button
                   variant={activeTab === "upload" ? "default" : "ghost"}
-                  onClick={() => setActiveTab("upload")}
+                  onClick={handleHeaderUploadClick}
                   className="gap-2 hover:scale-105 transition-transform duration-200"
                 >
                   <Upload className="w-4 h-4" />

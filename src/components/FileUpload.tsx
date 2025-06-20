@@ -1,5 +1,4 @@
-
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
@@ -7,7 +6,7 @@ import Papa from "papaparse";
 import { Upload, FileText, CheckCircle } from "lucide-react";
 
 interface FileUploadProps {
-  onFileUpload: (data: any[], filename: string) => void;
+  onFileUpload: (data: any[], filename: string, file: File) => void;
 }
 
 export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
@@ -15,6 +14,7 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const { toast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -78,7 +78,7 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
           description: `Processed ${results.data.length} rows of data.`,
         });
 
-        onFileUpload(results.data, file.name);
+        onFileUpload(results.data, file.name, file);
         setIsProcessing(false);
       },
       error: () => {
@@ -99,6 +99,12 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
     }
   };
 
+  const handleCardClick = (e: React.MouseEvent) => {
+    if (!isProcessing) {
+      fileInputRef.current?.click();
+    }
+  };
+
   return (
     <div className="max-w-2xl mx-auto">
       <Card 
@@ -115,7 +121,17 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
         onDragLeave={handleDragOut}
         onDragOver={handleDrag}
         onDrop={handleDrop}
+        onClick={handleCardClick}
+        style={{ cursor: isProcessing ? 'not-allowed' : 'pointer' }}
       >
+        <input
+          type="file"
+          accept=".csv"
+          onChange={handleFileInput}
+          className="hidden"
+          disabled={isProcessing}
+          ref={fileInputRef}
+        />
         <div className="p-12">
           <div className="text-center">
             <div className={`
@@ -157,35 +173,17 @@ export const FileUpload = ({ onFileUpload }: FileUploadProps) => {
                 <p className="text-gray-500 mb-6">
                   Drag and drop your CSV file here, or click to browse
                 </p>
-                
-                <input
-                  type="file"
-                  accept=".csv"
-                  onChange={handleFileInput}
-                  className="hidden"
-                  id="csv-upload"
-                  disabled={isProcessing}
-                />
-                
-                <Button 
-                  asChild
-                  className="gap-2 transition-all duration-300 hover:scale-105"
-                  disabled={isProcessing}
-                >
-                  <label htmlFor="csv-upload" className="cursor-pointer">
-                    <Upload className="w-4 h-4" />
-                    {isProcessing ? "Processing..." : "Choose File"}
-                  </label>
-                </Button>
-                
-                <p className="text-xs text-gray-400 mt-4">
-                  Supported format: CSV files only
-                </p>
+                <div className="flex flex-col items-center">
+                  <Upload className="w-4 h-4 mb-2 text-blue-500" />
+                  <span className="font-semibold text-gray-700">
+                    {isProcessing ? "Processing..." : "Click or drag to upload CSV"}
+                  </span>
+                  <span className="text-xs text-gray-400 mt-2">Supported format: CSV files only</span>
+                </div>
               </div>
             )}
           </div>
         </div>
-        
         {/* Animated border effect */}
         <div className={`
           absolute inset-0 bg-gradient-to-r from-blue-400 to-purple-400 opacity-0 transition-opacity duration-300

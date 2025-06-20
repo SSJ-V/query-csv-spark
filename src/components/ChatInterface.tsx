@@ -1,19 +1,15 @@
-
 import { useState, useRef, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
-import { Send, Bot, User, Brain, Loader2 } from "lucide-react";
-import { RAGProcessor } from "@/lib/ragProcessor";
+import { Send, Bot, User, Loader2 } from "lucide-react";
 
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   timestamp: Date;
-  reasoning?: string;
 }
 
 interface ChatInterfaceProps {
@@ -22,12 +18,12 @@ interface ChatInterfaceProps {
   fileName: string;
 }
 
-export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfaceProps) => {
+export const ChatInterface = ({ csvData, fileName }: ChatInterfaceProps) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: "welcome",
       role: "assistant",
-      content: `Hello! I've successfully processed your CSV file "${fileName}" with ${csvData.length} rows of data. I can now answer questions about your data using advanced retrieval-augmented generation with chain of thought reasoning. What would you like to know?`,
+      content: `Hello! I've successfully processed your CSV file "${fileName}" with ${csvData.length} rows of data. You can now ask me questions about your data.`,
       timestamp: new Date()
     }
   ]);
@@ -35,17 +31,10 @@ export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfac
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
-  const ragProcessor = new RAGProcessor();
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  useEffect(() => {
-    // Initialize RAG processor with CSV data
-    ragProcessor.indexData(csvData);
-    console.log("RAG processor initialized with", csvData.length, "records");
-  }, [csvData]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,25 +52,35 @@ export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfac
     setIsLoading(true);
 
     try {
-      console.log("Processing query:", input.trim());
-      
-      // Use RAG processor to generate response
-      const result = await ragProcessor.queryWithReasoning(input.trim(), csvData);
-      
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: result.answer,
-        reasoning: result.reasoning,
-        timestamp: new Date()
-      };
+      // Call your backend API here
+      const response = await fetch("http://localhost:8000/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: input.trim() }),
+      });
 
-      setMessages(prev => [...prev, assistantMessage]);
+      const result = await response.json();
+
+      if (result.error) {
+        toast({
+          title: "Backend Error",
+          description: result.error,
+          variant: "destructive",
+        });
+      } else {
+        const assistantMessage: Message = {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: `Query: ${result.query}\n\nFinal Answer: ${result.final_answer}`,
+          timestamp: new Date()
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+      }
     } catch (error) {
       console.error("Error processing query:", error);
       toast({
         title: "Error",
-        description: "Failed to process your question. Please try again.",
+        description: "Failed to communicate with backend.",
         variant: "destructive",
       });
     } finally {
@@ -99,17 +98,11 @@ export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfac
       <Card className="p-4 bg-white/60 backdrop-blur-sm border-white/20">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-            <Brain className="w-5 h-5 text-white" />
+            <Bot className="w-5 h-5 text-white" />
           </div>
           <div>
             <h3 className="font-semibold">RAG Chat Assistant</h3>
             <p className="text-sm text-gray-600">Ask questions about {fileName}</p>
-          </div>
-          <div className="ml-auto">
-            <Badge variant="secondary" className="gap-1">
-              <Brain className="w-3 h-3" />
-              Chain of Thought
-            </Badge>
           </div>
         </div>
       </Card>
@@ -140,17 +133,6 @@ export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfac
                 >
                   <p className="whitespace-pre-wrap">{message.content}</p>
                 </div>
-                
-                {message.reasoning && (
-                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                    <div className="flex items-center gap-2 mb-2">
-                      <Brain className="w-4 h-4 text-blue-500" />
-                      <span className="text-sm font-medium text-blue-700">Chain of Thought</span>
-                    </div>
-                    <p className="text-sm text-blue-800 whitespace-pre-wrap">{message.reasoning}</p>
-                  </div>
-                )}
-                
                 <div className="text-xs text-gray-500">
                   {formatTimestamp(message.timestamp)}
                 </div>
@@ -163,7 +145,7 @@ export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfac
               )}
             </div>
           ))}
-          
+
           {isLoading && (
             <div className="flex gap-3 animate-fade-in">
               <div className="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
@@ -172,7 +154,7 @@ export const ChatInterface = ({ knowledgeBase, csvData, fileName }: ChatInterfac
               <div className="bg-gray-100 p-3 rounded-lg">
                 <div className="flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-gray-600">Thinking with chain of thought reasoning...</span>
+                  <span className="text-gray-600">Thinking...</span>
                 </div>
               </div>
             </div>

@@ -1,9 +1,10 @@
-# fastapi_backend/main.py
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import pandas as pd
 import io
+import re
+import os
 from langchain_ollama import ChatOllama
 from langchain.agents import initialize_agent
 from langchain.agents.agent_types import AgentType
@@ -11,7 +12,7 @@ from langchain_experimental.tools.python.tool import PythonAstREPLTool
 
 app = FastAPI()
 
-# Enable CORS for frontend access
+# CORS setup
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,24 +21,60 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store uploaded DataFrame and agent
-df = None
-agent_executor = None
+# Global state
+state = {
+    "df": None,
+    "agent_executor": None,
+    "repl_tool": None
+}
 
 class Query(BaseModel):
     question: str
 
+def infer_column_description(colname):
+    colname_lower = colname.lower()
+    if any(keyword in colname_lower for keyword in ['id', 'match', 'game', 'student', 'invoice']):
+        return "Unique identifier or reference."
+    elif any(keyword in colname_lower for keyword in ['date', 'time', 'year', 'month']):
+        return "Temporal information."
+    elif any(keyword in colname_lower for keyword in ['team', 'company', 'org', 'school']):
+        return "Organization name or group."
+    elif any(keyword in colname_lower for keyword in ['player', 'batter', 'bowler', 'student', 'name']):
+        return "Person name."
+    elif any(keyword in colname_lower for keyword in ['run', 'score', 'grade', 'mark', 'revenue', 'amount']):
+        return "Numeric value or measurement."
+    elif any(keyword in colname_lower for keyword in ['is_', 'flag', 'bool', 'yes', 'no']):
+        return "Boolean indicator."
+    else:
+        return "General information."
+
 @app.post("/upload-csv")
 async def upload_csv(file: UploadFile = File(...)):
-    global df, agent_executor
     content = await file.read()
-    df = pd.read_csv(io.StringIO(content.decode("utf-8")))
+    try:
+        df = pd.read_csv(io.StringIO(content.decode("utf-8")))
+    except Exception as e:
+        return {"error": f"Failed to read CSV: {str(e)}"}
 
-    # Setup REPL tool with DataFrame
-    tools = [PythonAstREPLTool()]
-    tools[0].globals = {"df": df}
+    if df.shape[1] == 0:
+        return {"error": "No columns found in uploaded CSV."}
 
-    # Initialize LLM
+    state["df"] = df
+
+    # Generate schema hint dynamically
+    schema_hint = "The dataset has the following columns:\n"
+    for col in df.columns:
+        dtype = str(df[col].dtype)
+        description = infer_column_description(col)
+        schema_hint += f"- '{col}' ({dtype}): {description}\n"
+
+    print("\n=== CSV Uploaded ===")
+    print(schema_hint)
+    print(df.head())
+
+    repl_tool = PythonAstREPLTool()
+    repl_tool.globals = {"df": df}
+
     llm = ChatOllama(
         base_url="http://localhost:11434",
         model="llama3",
@@ -45,26 +82,29 @@ async def upload_csv(file: UploadFile = File(...)):
         api_key="ollama"
     )
 
-    # Initialize agent
     agent_executor = initialize_agent(
-        tools=tools,
+        tools=[repl_tool],
         llm=llm,
         agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION,
         agent_kwargs={
             "prefix": (
-                "You are a data analyst AI with access to a pandas DataFrame called `df`, which contains the uploaded CSV file. "
-                "Use Python code to analyze the data and answer the user's questions. Always use the tool to run code. "
-                "Do not say you lack access—the data is local and you have permission to analyze it."
+                "You are an expert data analyst AI with access to a pandas dataframe `df` loaded from the uploaded CSV file.\n"
+                "The dataframe columns and inferred descriptions are:\n"
+                f"{schema_hint}\n"
+                "Reason carefully and think step-by-step before answering.\n"
+                "Only use Python code when needed to calculate answers.\n"
+                "Do NOT assume relationships that are not directly present in the data unless clearly evident from the question and column names.\n"
+                "You have no prior domain knowledge, you only know what the CSV provides."
             ),
             "format_instructions": (
                 "Use this format:\n\n"
                 "Question: the input question\n"
                 "Thought: your reasoning\n"
                 "Action: python_repl_ast\n"
-                "Action Input: Python code using df (e.g., df['runs'].mean())\n"
-                "Observation: the result of the code\n"
+                "Action Input: python code using df\n"
+                "Observation: result of code\n"
                 "...\n"
-                "Final Answer: your final answer to the question"
+                "Final Answer: your final answer."
             )
         },
         verbose=True,
@@ -73,16 +113,60 @@ async def upload_csv(file: UploadFile = File(...)):
         max_execution_time=120,
     )
 
+    state["agent_executor"] = agent_executor
+    state["repl_tool"] = repl_tool
+
     return {"status": "success", "columns": df.columns.tolist(), "rows": len(df)}
 
 @app.post("/ask")
 async def ask_question(query: Query):
-    global agent_executor
-    if not agent_executor:
+    if state["agent_executor"] is None or state["df"] is None:
         return {"error": "No CSV uploaded or agent not initialized."}
 
+    print(f"\n=== New User Query: {query.question} ===")
+
     try:
-        result = agent_executor.invoke({"input": query.question})
-        return {"response": result["output"]}
+        result = state["agent_executor"].invoke({"input": query.question})
+        full_output = result["output"]
+
+        print("\n--- Raw Agent Output ---")
+        print(full_output)
+        print("------------------------")
+
+        # Extract and stack all Action Inputs including prefix
+        action_input_matches = re.findall(r"(Action Input:\s*`?.*?`?)\s*(?:\n|$)", full_output, re.DOTALL)
+        if action_input_matches:
+            stacked_action_inputs = "\n".join(action_input_matches)
+        else:
+            stacked_action_inputs = query.question
+
+        # Extract Final Answer
+        final_answer_match = re.search(r"Final Answer:\s*(.*)", full_output, re.IGNORECASE | re.DOTALL)
+        if final_answer_match:
+            final_answer_raw = final_answer_match.group(1).strip()
+            final_answer = re.split(r"Note:", final_answer_raw)[0].strip()
+            print(f"Extracted Clean Final Answer: {final_answer}")
+        else:
+            if "iteration limit" in full_output.lower() or "time limit" in full_output.lower():
+                final_answer = "The question was too vague, could not get the required output."
+            else:
+                sentences = [s.strip() for s in full_output.split('\n') if s.strip()]
+                fallback_answer = next(
+                    (s for s in reversed(sentences) if "note" not in s.lower()),
+                    full_output.strip()
+                )
+                final_answer = fallback_answer
+            print(f"No 'Final Answer:' found. Fallback: {final_answer}")
+
+        return {
+            "query": stacked_action_inputs,
+            "final_answer": final_answer
+        }
+
     except Exception as e:
+        print(f"Error: {e}")
         return {"error": str(e)}
+
+@app.get("/")
+def read_root():
+    return {"status": "ok"}
